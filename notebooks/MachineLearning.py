@@ -72,7 +72,8 @@ class Regressors:
         self._scaled_Xtrain = split[4]
         self._scaled_Xtest = split[5]
 
-    def Reg_scoring(self, Y_true, Y_pred):
+    @staticmethod
+    def Reg_scoring(Y_true, Y_pred):
         """
         Evaluate metrics on predicted data.
 
@@ -95,7 +96,8 @@ class Regressors:
 
         return score
 
-    def CV_scoring(self, reg, data_X, data_Y, n_folds):
+    @staticmethod
+    def CV_scoring(reg, data_X, data_Y, n_folds=5):
         """
         Evaluate metrics on cross-validation predictions.
 
@@ -130,7 +132,7 @@ class Regressors:
         return score
 
     def RFregressor(self, cross_validation=False, n_folds=5,
-                    n_estimators=50, max_depth=30, max_features='auto',
+                    n_estimators=50, max_depth=16, max_features='auto',
                     scoring=False):
         """
         Apply random forest regressor to train and predict data
@@ -173,15 +175,7 @@ class Regressors:
 
             # Evaluate the prediction if scoring==True
             if scoring:
-                score = self.CV_scoring
-                sdict = cross_validate(reg, self._X, self._Y, cv=n_folds,
-                                       scoring=['neg_mean_squared_error',
-                                                'neg_median_absolute_error',
-                                                'r2'])
-                score['MSE'] = -sdict['test_neg_mean_squared_error'].mean()
-                score['MAE'] = -sdict['test_neg_median_absolute_error'].mean()
-                score['R2'] = sdict['test_r2'].mean()
-                score['fit_time'] = sdict['fit_time'].mean()
+                score = self.CV_scoring(reg, self._X, self._Y, n_folds=n_folds)
 
         else:
             # Train the regressor
@@ -206,7 +200,8 @@ class Regressors:
         return result
 
     def KNNregressor(self, cross_validation=False, n_folds=5,
-                     n_neighbors=10, weights='uniform', scoring=False):
+                     n_neighbors=10, weights='uniform', scoring=False,
+                     **kwarg):
         """
         Apply k nearest neighbor regressor to train and predict data
 
@@ -236,35 +231,50 @@ class Regressors:
 
         if cross_validation:
             # Run cross-validation
-            Y_predict = cross_val_predict(reg, self._X, self._Y,
-                                          cv=n_folds)
-            Y_test = self._Y
+            if weights == 'uniform':
+                Y_predict = cross_val_predict(reg, self._X, self._Y,
+                                              cv=n_folds)
+                Y_test = self._Y
+                # Evaluate the prediction if scoring==True
+                if scoring:
+                    score = self.CV_scoring(reg, self._X, self._Y,
+                                            n_folds=n_folds)
 
-            # Evaluate the prediction if scoring==True
-            if scoring:
-                score = {}
-                sdict = cross_validate(reg, self._X, self._Y, cv=n_folds,
-                                       scoring=['neg_mean_squared_error',
-                                                'neg_median_absolute_error',
-                                                'r2'])
-                score['MSE'] = -sdict['test_neg_mean_squared_error'].mean()
-                score['MAE'] = -sdict['test_neg_median_absolute_error'].mean()
-                score['R2'] = sdict['test_r2'].mean()
-                score['fit_time'] = sdict['fit_time'].mean()
+            if weights == 'distance':
+                Y_predict = cross_val_predict(reg, self._scaled_X, self._Y,
+                                              cv=n_folds)
+                Y_test = self._Y
+                # Evaluate the prediction if scoring==True
+                if scoring:
+                    score = self.CV_scoring(reg, self._scaled_X, self._Y,
+                                            n_folds=n_folds)
 
         else:
             # Train the regressor
-            start = time.clock()
-            reg.fit(self._Xtrain, self._Ytrain)
-            end = time.clock()
-            # Get predictions from regressor
-            Y_predict = reg.predict(self._Xtest)
-            Y_test = self._Ytest
+            if weights == 'uniform':
+                start = time.clock()
+                reg.fit(self._Xtrain, self._Ytrain)
+                end = time.clock()
+                # Get predictions from regressor
+                Y_predict = reg.predict(self._Xtest)
+                Y_test = self._Ytest
+                # Evaluate the prediction if scoring==True
+                if scoring:
+                    score = self.Reg_scoring(Y_test, Y_predict)
+                    score['fit_time'] = end - start
 
-            # Evaluate the prediction if scoring==True
-            if scoring:
-                score = self.Reg_scoring(Y_test, Y_predict)
-                score['fit_time'] = end - start
+            if weights == 'distance':
+                # Train the regressor
+                start = time.clock()
+                reg.fit(self._scaled_Xtrain, self._Ytrain)
+                end = time.clock()
+                # Get predictions from regressor
+                Y_predict = reg.predict(self._scaled_Xtest)
+                Y_test = self._Ytest
+                # Evaluate the prediction if scoring==True
+                if scoring:
+                    score = self.Reg_scoring(Y_test, Y_predict)
+                    score['fit_time'] = end - start
 
         result = Table([Y_predict, Y_test],
                        names=['predict', 'test'])
@@ -311,16 +321,8 @@ class Regressors:
 
             # Evaluate the prediction if scoring==True
             if scoring:
-                score = {}
-                sdict = cross_validate(reg, self._scaled_X, self._Y,
-                                       cv=n_folds,
-                                       scoring=['neg_mean_squared_error',
-                                                'neg_median_absolute_error',
-                                                'r2'])
-                score['MSE'] = -sdict['test_neg_mean_squared_error'].mean()
-                score['MAE'] = -sdict['test_neg_median_absolute_error'].mean()
-                score['R2'] = sdict['test_r2'].mean()
-                score['fit_time'] = sdict['fit_time'].mean()
+                score = self.CV_scoring(reg, self._scaled_X, self._Y,
+                                        n_folds=n_folds)
 
         else:
             # Train the regressor

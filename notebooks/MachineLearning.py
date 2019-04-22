@@ -13,35 +13,43 @@ from sklearn.metrics import r2_score
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics import median_absolute_error
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import cross_val_predict
 from sklearn.model_selection import cross_validate
+from sklearn.decomposition import PCA
+from xgboost import XGBRegressor
 
 
 class Regressors:
     """
     This class includs several machine learning regression methods which are
-    random forest, k nearest neighbors (both uniform and distance weighted)
+    random forest, k nearest neighbors, gradient boosting and xgboost
     to train and predict data.
 
     Example:
 
     # data_X and data_Y are training input and target data.
     reg = Regressor(data_X, data_Y)
-    data_predict, data_test = reg.RFregressor()
-    data_predict, data_test = reg.KNNregressor()
-    data_predict, data_test = reg.KNN_dregressor()
+    data_predict, data_test = reg.RFregressor(**kwargs)
+    data_predict, data_test = reg.KNNregressor(**kwargs)
+    data_predict, data_test = reg.KNN_dregressor(**kwargs)
+    data_predict, data_test = reg.GBregressor(**kwargs)
+    data_predict, data_test = reg.Xgboostregressor(**kwargs)
 
     # or use cross validation
     data_predict, data_test = reg.RFregressor(cross_validation=True)
     data_predict, data_test = reg.KNNregressor(cross_validation=True)
     data_predict, data_test = reg.KNN_dregressor(cross_validation=True)
+    data_predict, data_test = reg.GBregressor(cross_validation=True)
+    data_predict, data_test = reg.Xgboostregressor(cross_validation=True)
 
     """
 
-    def __init__(self, data_X, data_Y, train_size=0.5, test_size=0.5):
+    def __init__(self, data_X, data_Y, train_size=0.5, test_size=0.5, 
+                 random_state=None, apply_pca=False):
         """
         Args:
             data_X: array-like or matrix of shape=[n_samples, n_features]
@@ -52,7 +60,12 @@ class Regressors:
                 Train test split ratio (if not using cross_validation)
             test_size: float
                 Train test split ratio (if not using cross_validation)
-
+            random_state: int
+                Random seed from which to split the test and training sample
+            apply_pca: bool
+                If true, the training features will first be decomposed by PCA
+                before they are used to train the regressor. PCA uses no
+                information from the testing features
         """
         self._X = data_X
         self._Y = data_Y
@@ -64,13 +77,31 @@ class Regressors:
 
         # Train-test split
         split = train_test_split(self._X, self._Y, self._scaled_X,
-                                 train_size=train_size, test_size=test_size)
-        self._Xtrain = split[0]
-        self._Xtest = split[1]
+                                 train_size=train_size, test_size=test_size,
+                                 random_state=random_state)
+        
+        # Apply principal component analysis
+        if apply_pca:
+            ndim = self._X.shape[1]
+            self._X = PCA(n_components=ndim).fit_transform(self._X)
+            self._scaled_X = PCA(n_components=ndim).fit_transform(self._scaled_X)
+            
+            pca = PCA(n_components=ndim)
+            self._Xtrain = pca.fit_transform(split[0])
+            self._Xtest = pca.transform(split[1])
+            
+            pca = PCA(n_components=ndim)
+            self._scaled_Xtrain = pca.fit_transform(split[4])
+            self._scaled_Xtest = pca.transform(split[5])
+        else:
+            self._Xtrain = split[0]
+            self._Xtest = split[1]
+            self._scaled_Xtrain = split[4]
+            self._scaled_Xtest = split[5]
+        
         self._Ytrain = split[2]
         self._Ytest = split[3]
-        self._scaled_Xtrain = split[4]
-        self._scaled_Xtest = split[5]
+
 
     @staticmethod
     def Reg_scoring(Y_true, Y_pred):
@@ -131,9 +162,9 @@ class Regressors:
 
         return score
 
-    def RFregressor(self, cross_validation=False, n_folds=5,
-                    n_estimators=50, max_depth=16, max_features='auto',
-                    scoring=False):
+    def RFregressor(self, cross_validation=False, n_folds=5, scoring=False,
+                    n_estimators=50, max_depth=18, max_features='auto',
+                    **kwargs):
         """
         Apply random forest regressor to train and predict data
 
@@ -145,7 +176,7 @@ class Regressors:
             n_estimators: int (default=50)
                 The number of trees in the forest.
                 (Refer to RandomForestRegressor docstring)
-            max_depth: int (default=30)
+            max_depth: int (default=18)
                 The maximum depth of the tree.
                 (Refer to RandomForestRegressor docstring)
             max_features: int, float, string or None (default='auto')
@@ -165,7 +196,8 @@ class Regressors:
         """
         reg = RandomForestRegressor(n_estimators=n_estimators,
                                     max_depth=max_depth,
-                                    max_features=max_features)
+                                    max_features=max_features,
+                                    **kwargs)
 
         if cross_validation:
             # Run cross-validation
@@ -196,14 +228,153 @@ class Regressors:
         if scoring:
             for key in score:
                 result.meta[key] = score[key]
+        result.meta['model'] = reg
+
+        return result
+
+    def Xgboostregressor(self, cross_validation=False, n_folds=5,
+                         scoring=False, booster='dart', learning_rate=0.1,
+                         max_depth=5, objective='reg:linear',
+                         normalize_type='tree', **kwargs):
+        """
+        Apply xgboost regression to train and predict data.
+
+        Args:
+            cross_validation: boolean (default=False)
+                Whether to use cross-validation
+            n_folds: int (default=5)
+                The n_folds number if using cross-validation
+            scoring: boolean (default=False)
+                Whether to evaluate the prediction. If true, evaluate
+                mean squared error, median absolute error and R^2
+            booster: str (default='dart')
+                Which booster to use. Can be 'gbtree', 'gblinear' or 'dart'.
+            learning_rate: float (default0=0.1) range: [0,1]
+                Step size shrinkage used in update to prevents overfitting.
+            max_depth: int (default=5)
+                Maximum depth of a tree.
+            objective: str (default='reg:linear')
+                Can be 'reg:linear', 'reg:logistic', 'reg:gamma' etc.
+            normalize_type: str (default='tree')
+                Type of normalization algorithm. Can be 'tree' or 'forest'.
+            **kwarg: other kwargs for XGBRegressor()
+
+        Returns:
+            result: astropy table
+                A table contains predictions and testing data. Also contains
+                scores such as mean squared error, median absolute error, R^2
+                and training time in meta data if scoring option is True.
+
+        """
+        reg = XGBRegressor(booster=booster, learning_rate=learning_rate,
+                           max_depth=max_depth, objective=objective,
+                           normalize_type=normalize_type, **kwargs)
+
+        if cross_validation:
+            # Run cross-validation
+            Y_predict = cross_val_predict(reg, self._X, self._Y,
+                                          cv=n_folds)
+            Y_test = self._Y
+
+            # Evaluate the prediction if scoring==True
+            if scoring:
+                score = self.CV_scoring(reg, self._X, self._Y, n_folds=n_folds)
+
+        else:
+            # Train the regressor
+            start = time.clock()
+            reg.fit(self._Xtrain, self._Ytrain)
+            end = time.clock()
+            # Get predictions from regressor
+            Y_predict = reg.predict(self._Xtest)
+            Y_test = self._Ytest
+
+            # Evaluate the prediction if scoring==True
+            if scoring:
+                score = self.Reg_scoring(Y_test, Y_predict)
+                score['fit_time'] = end - start
+
+        result = Table([Y_predict, Y_test],
+                       names=['predict', 'test'])
+        if scoring:
+            for key in score:
+                result.meta[key] = score[key]
+        result.meta['model'] = reg
+
+        return result
+
+    def GBregressor(self, cross_validation=False, n_folds=5,
+                    scoring=False, max_depth=5, n_estimators=100,
+                    learning_rate=0.1, **kwargs):
+        """
+        Apply gradient boosting regression to train and predict data.
+
+        Args:
+            cross_validation: boolean (default=False)
+                Whether to use cross-validation
+            n_folds: int (default=5)
+                The n_folds number if using cross-validation
+            scoring: boolean (default=False)
+                Whether to evaluate the prediction. If true, evaluate
+                mean squared error, median absolute error and R^2
+            max_depth: int (default=5)
+                Maximum depth of a tree.
+            n_estimators: int (default=100)
+                The number of boosting stages to perform.
+            learning_rate: float (default0=0.1) range: [0,1]
+                Step size shrinkage used in update to prevents overfitting.
+            **kwarg: other kwargs for GradientBoostingRegressor().
+
+        Returns
+            result: astropy table
+                A table contains predictions and testing data. Also contains
+                scores such as mean squared error, median absolute error, R^2
+                and training time in meta data if scoring option is True.
+
+        """
+        reg = GradientBoostingRegressor(n_estimators=n_estimators,
+                                        max_depth=max_depth,
+                                        learning_rate=learning_rate,
+                                        **kwargs)
+
+        if cross_validation:
+            # Run cross-validation
+            Y_predict = cross_val_predict(reg, self._X, self._Y,
+                                          cv=n_folds)
+            Y_test = self._Y
+
+            # Evaluate the prediction if scoring==True
+            if scoring:
+                score = self.CV_scoring(reg, self._X, self._Y, n_folds=n_folds)
+
+        else:
+            # Train the regressor
+            start = time.clock()
+            reg.fit(self._Xtrain, self._Ytrain)
+            end = time.clock()
+            # Get predictions from regressor
+            Y_predict = reg.predict(self._Xtest)
+            Y_test = self._Ytest
+
+            # Evaluate the prediction if scoring==True
+            if scoring:
+                score = self.Reg_scoring(Y_test, Y_predict)
+                score['fit_time'] = end - start
+
+        result = Table([Y_predict, Y_test],
+                       names=['predict', 'test'])
+        if scoring:
+            for key in score:
+                result.meta[key] = score[key]
+        result.meta['model'] = reg
 
         return result
 
     def KNNregressor(self, cross_validation=False, n_folds=5,
                      n_neighbors=10, weights='uniform', scoring=False,
-                     **kwarg):
+                     **kwargs):
         """
-        Apply k nearest neighbor regressor to train and predict data
+        Apply k nearest neighbor regression to train and predict data
 
         Args:
             cross_validation: boolean (default=False)
@@ -227,7 +398,8 @@ class Regressors:
                 and training time if scoring option is True.
 
         """
-        reg = KNeighborsRegressor(n_neighbors=n_neighbors, weights=weights)
+        reg = KNeighborsRegressor(n_neighbors=n_neighbors, weights=weights,
+                                  **kwargs)
 
         if cross_validation:
             # Run cross-validation
@@ -281,12 +453,16 @@ class Regressors:
         if scoring:
             for key in score:
                 result.meta[key] = score[key]
+        result.meta['model'] = reg
 
         return result
 
-    def KNN_dregressor(self, cross_validation=False, n_folds=5,
-                       n_neighbors=10, weights='distance', scoring=False):
+    def KNN_dregressor(self, cross_validation=False, n_folds=5, scoring=False,
+                       n_neighbors=10, weights='distance', **kwargs):
         """
+        (This method is equivalent to KNNregressor when specifying
+        weights='distance'.)
+
         Apply k nearest neighbor (weighted) regressor to train and predict data
 
         Args:
@@ -343,5 +519,6 @@ class Regressors:
         if scoring:
             for key in score:
                 result.meta[key] = score[key]
+        result.meta['model'] = reg
 
         return result
